@@ -30,7 +30,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '航班状态': '航班计划样例2'},
  {'id': 3,
   'status': '保障中',
-  'pending': False,
+  'pending': True,
   'abnormal': False,
   '航班号': '航班计划样例3',
   '执行日期': '2026-09-03',

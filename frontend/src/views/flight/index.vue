@@ -36,13 +36,16 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            {{ column === '航班状态' ? (row.status ?? '—') : (row[column] ?? '—') }}
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
               :key="action"
               class="link"
               type="button"
+              :disabled="!!submittingKey"
               @click="runAction(action, row)"
             >
               {{ action }}
@@ -63,23 +66,33 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | null>
 
 const ENDPOINT = '/api/flight'
 const columns = ["航班号", "执行日期", "机型", "起降性质", "计划时刻", "预计时刻", "保障等级", "航班状态"]
 const actions = ["确认计划", "开始保障", "结束保障"]
 const statuses = ["待确认", "已确认", "保障中", "已结束"]
-const stats = [{"label": "今日航班", "value": 0}, {"label": "保障中航班", "value": 0}, {"label": "已结束航班", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const submittingKey = ref('')
+
+const stats = computed(() => {
+  const isStatus = (value: string) => (row: Row) => row.status === value
+  return [
+    { label: "今日航班", value: total.value },
+    { label: "保障中航班", value: rows.value.filter(isStatus("保障中")).length },
+    { label: "已结束航班", value: rows.value.filter(isStatus("已结束")).length },
+    { label: "待处理航班", value: rows.value.filter((row) => row.status !== "已结束").length },
+  ]
+})
 
 function resetFilters() {
   filters.value = {}
@@ -95,18 +108,27 @@ function openCreate() {
 }
 
 async function runAction(action: string, row: Row) {
+  if (submittingKey.value) {
+    return
+  }
   errorMessage.value = ''
+  submittingKey.value = `${String(row.id)}:${action}`
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('航班计划动作未生效，请稍后重试')
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; message?: string }
+      | null
+    if (!response.ok || !payload || payload.ok === false) {
+      throw new Error(payload?.message || '航班计划动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '航班计划操作失败'
+  } finally {
+    submittingKey.value = ''
   }
 }
 

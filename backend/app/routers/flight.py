@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.flight import FlightService
@@ -49,9 +49,15 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
-def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条航班计划执行确认计划、开始保障、结束保障；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
+def run_action(entry_id: int, payload: dict[str, Any] = Body(default_factory=dict)) -> ActionResult:
+    """对单条航班计划执行确认计划、开始保障、结束保障；不允许的动作会被拦下并说明原因。
+
+    请求体兼容两种形式：{"action": "确认计划"} 或 {"values": {"action": "确认计划"}}。
+    """
+    values = payload.get("values")
+    if not isinstance(values, dict):
+        values = payload
+    action = str(values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)

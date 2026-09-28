@@ -43,6 +43,7 @@
               :key="action"
               class="link"
               type="button"
+              :disabled="busyKey === actionKey(action, row)"
               @click="runAction(action, row)"
             >
               {{ action }}
@@ -58,12 +59,13 @@
     <footer class="page-foot">
       <span>共 {{ total }} 条航班计划记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span v-else-if="successMessage" class="success-text">{{ successMessage }}</span>
     </footer>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 
 import { request } from '@/api/client'
 
@@ -73,13 +75,25 @@ const ENDPOINT = '/api/flight'
 const columns = ["航班号", "执行日期", "机型", "起降性质", "计划时刻", "预计时刻", "保障等级", "航班状态"]
 const actions = ["确认计划", "开始保障", "结束保障"]
 const statuses = ["待确认", "已确认", "保障中", "已结束"]
-const stats = [{"label": "今日航班", "value": 0}, {"label": "保障中航班", "value": 0}, {"label": "已结束航班", "value": 0}]
+
+const stats = reactive([
+  { label: "今日航班", value: 0 },
+  { label: "待处理航班", value: 0 },
+  { label: "保障中航班", value: 0 },
+  { label: "已结束航班", value: 0 },
+])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const successMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const busyKey = ref('')
+
+function actionKey(action: string, row: Row) {
+  return `${String(row.id)}:${action}`
+}
 
 function resetFilters() {
   filters.value = {}
@@ -95,18 +109,29 @@ function openCreate() {
 }
 
 async function runAction(action: string, row: Row) {
+  if (busyKey.value) {
+    return
+  }
   errorMessage.value = ''
+  successMessage.value = ''
+  busyKey.value = actionKey(action, row)
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
       body: JSON.stringify({ action }),
     })
-    if (!response.ok) {
-      throw new Error('航班计划动作未生效，请稍后重试')
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; message?: string }
+      | null
+    if (!response.ok || !payload || payload.ok === false) {
+      throw new Error(payload?.message || '航班计划动作未生效，请稍后重试')
     }
-    await reload()
+    successMessage.value = payload.message || `航班计划已${action}`
+    await Promise.all([reload(), refreshStats()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '航班计划操作失败'
+  } finally {
+    busyKey.value = ''
   }
 }
 
@@ -126,5 +151,25 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+async function refreshStats() {
+  // 统计口径不受列表筛选影响，取全量后按内部状态汇总待处理/保障中/已结束数量
+  try {
+    const response = await request(`${ENDPOINT}?page=1&size=200`)
+    if (!response.ok) {
+      return
+    }
+    const payload = await response.json()
+    const allRows = (payload.items ?? []) as Row[]
+    stats[0].value = Number(payload.total ?? allRows.length)
+    stats[1].value = allRows.filter((row) => row.status !== '已结束').length
+    stats[2].value = allRows.filter((row) => row.status === '保障中').length
+    stats[3].value = allRows.filter((row) => row.status === '已结束').length
+  } catch {
+    // 统计刷新失败不阻断列表操作，保留上一次的数字
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([reload(), refreshStats()])
+})
 </script>
